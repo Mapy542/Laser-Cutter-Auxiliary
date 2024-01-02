@@ -61,7 +61,7 @@ class SimpleAuxiliaryFeature {
 
     void initialize() {  // called once to initialize the feature
         pinMode(outputPin, OUTPUT);
-        pinMode(inputPin, INPUT);
+        pinMode(inputPin, inputPinMode);
         pinMode(triggerPin, triggerPinMode);
 
         digitalWrite(outputPin, invertOutput);
@@ -70,7 +70,7 @@ class SimpleAuxiliaryFeature {
     void update(bool estop) {  // called every loop to update the output pin
 
         if (estop && EstopAffected) {
-            digitalWrite(outputPin, false);
+            digitalWrite(outputPin, false != invertOutput);
             return;
         }
 
@@ -83,9 +83,9 @@ class SimpleAuxiliaryFeature {
         bool relatedInput = inputActive == inputOutputRelation;
 
         if (!triggerAffected) {
-            outputActive = relatedInput;
+            outputActive = relatedInput != invertOutput;
         } else if (!inputAffected) {
-            outputActive = relatedTrigger;
+            outputActive = relatedTrigger != invertOutput;
         } else {
             if (inputTriggerRelation) {
                 outputActive = (relatedTrigger && relatedInput) != invertOutput;
@@ -99,16 +99,17 @@ class SimpleAuxiliaryFeature {
 };
 
 SimpleAuxiliaryFeature simpleFeatures[] = {
-    SimpleAuxiliaryFeature(40, A15, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(52, 35, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
                            true),  // Air Assist
-    SimpleAuxiliaryFeature(37, A14, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(37, 34, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, false,
                            true),  // Water Chiller
-    SimpleAuxiliaryFeature(39, A13, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(51, 33, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
                            true),  // Water Pump
-    SimpleAuxiliaryFeature(48, A11, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(36, 32, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
                            true),  // Exhaust Fan
-    SimpleAuxiliaryFeature(52, A12, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
-                           false),  // Cabinet LEDS
+    // SimpleAuxiliaryFeature(52, A12, A0, false, true, false, false, false, INPUT, INPUT_PULLUP,
+    // true,
+    //                        false),  // Cabinet LEDS
 };
 
 byte simpleFeatureCount = sizeof(simpleFeatures) / sizeof(SimpleAuxiliaryFeature);
@@ -145,8 +146,15 @@ void VlDebug(uint8_t status) {
     }
 }
 
-struct VlData ReadVlSensor(bool doReadVlSensor) {
-    if (!doReadVlSensor) {
+/*!
+    @brief Reads the vl sensor and returns the range and status
+
+    @returns VlData struct containing the range, status, and success of the reading. If reading is
+    isRangeComplete, success will be false and range and status will be 0.
+*/
+
+struct VlData ReadVlSensor() {
+    if (!vl.isRangeComplete()) {  // if range is not complete, return empty data
         struct VlData empty;
         empty.range = 0;
         empty.status = 0;
@@ -154,8 +162,9 @@ struct VlData ReadVlSensor(bool doReadVlSensor) {
         return empty;
     }
 
-    uint8_t range = vl.readRange();
-    uint8_t status = vl.readRangeStatus();
+    uint8_t status = vl.readRangeStatus();  // read range status
+    uint8_t range = vl.readRangeResult();  // read range result and clear interrupt for next reading
+    Serial.println(range);
 
     VlDebug(status);
 
@@ -356,9 +365,9 @@ class BedLift {
                 stopActuate();  // stop moving
             }
         } else if (tripleToggleInput2Active ==
-                   invertTripleToggleInput2) {   // if switch is right, auto continuous compensation
-                                                 // mode
-            IlluminateButtonLEDs(false, false);  // disable leds
+                   invertTripleToggleInput2) {  // if switch is right, auto continuous compensation
+                                                // mode
+            IlluminateButtonLEDs(true, true);   // disable leds
 
             struct VlData VlReturn = ReadVlSensor(true);  // read vl sensor and get returns
 
@@ -371,9 +380,14 @@ class BedLift {
             }
 
         } else {                                // middle single shot mode
-            IlluminateButtonLEDs(true, false);  // illuminate up button led (as the activate button)
+            IlluminateButtonLEDs(false, true);  // illuminate up button led (as the activate button)
 
-            struct VlData VlReturn = ReadVlSensor(true);  // read vl sensor and get returns
+            struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
+
+            if (VlReturn.success == false) {
+                Serial.println("read failed/not ready");
+                return;
+            }
 
             if (upButtonActive) {
                 if (VlReturn.success) {  // if vl sensor read was successful
@@ -382,7 +396,8 @@ class BedLift {
                     PidActuate(error);
                 }  // actuate based on error
                 else {
-                    stopActuate();  // stop moving
+                    return;  // if vl sensor read was not successful, do not actuate
+                    // may want to add a timeout to prevent getting stuck here
                 }
             } else {
                 stopActuate();
@@ -392,8 +407,8 @@ class BedLift {
 };
 
 BedLift autoBed = BedLift(2, 3, false, 26, 27, INPUT_PULLUP, INPUT_PULLUP, true, true, A4, A3, true,
-                          true, INPUT_PULLUP, INPUT_PULLUP, 46, 47, A8, A7, true, true,
-                          INPUT_PULLUP, INPUT_PULLUP, 200000, 2 * 25.4, 5);
+                          true, INPUT_PULLUP, INPUT_PULLUP, 44, 45, A8, A7, true, true,
+                          INPUT_PULLUP, INPUT_PULLUP, 1000, 2 * 25.4, 5);
 
 ///////////////////
 
@@ -407,11 +422,11 @@ int BreakEstopPin = 53;
 byte safetyRelayResetButtonIlluminationState = 0;
 
 void safetyRelayResetButtonIlluminate(bool estop, bool laserStop) {
-    if (!estop) {                                      // if estop is not made flash LEDS
-        safetyRelayResetButtonIlluminationState += 1;  // increment state
+    if (estop) {                                        // if estop is not made flash LEDS
+        safetyRelayResetButtonIlluminationState += 10;  // increment state
         analogWrite(SafetyRelayResetButtonLED,
                     abs(safetyRelayResetButtonIlluminationState - 128) * 2);  // set LEDS to state
-    } else if (!laserStop) {                          // if estop is made but laser is not active
+    } else if (laserStop) {                           // if estop is made but laser is not active
         analogWrite(SafetyRelayResetButtonLED, 255);  // turn off LEDS
     } else {                                          // if estop is made and laser is active
         analogWrite(SafetyRelayResetButtonLED, 0);    // turn on LEDS
@@ -431,6 +446,7 @@ void setup() {
     pinMode(LaserStopPin, INPUT);
     pinMode(SafetyRelayResetButtonLED, OUTPUT);
     pinMode(BreakEstopPin, OUTPUT);
+    pinMode(24, INPUT);
 
     if (!vl.begin()) {
         Serial.println("Failed to find sensor");
@@ -438,11 +454,15 @@ void setup() {
             delay(100);
         }
     }
+
+    vl.startRangeContinuous(50);  // 50 ms interval continuous mode
 }
 
 void loop() {
-    bool estop = digitalRead(EStopPin);  // read estop pin and laser stop pin
-    bool laserStop = digitalRead(LaserStopPin);
+    bool estop =
+        digitalRead(EStopPin) != true;  // read estop pin and laser stop pin (invert signal)
+    bool laserStop = digitalRead(LaserStopPin) != true;
+    digitalWrite(LED_BUILTIN, estop);  // set builtin led to estop state
 
     for (int i = 0; i < simpleFeatureCount; i++) {  // update all features
         simpleFeatures[i].update(estop);
@@ -455,4 +475,6 @@ void loop() {
                  TriggerEStop);  // set break estop pin to trigger estop if applicable
 
     autoBed.update(estop);  // update bed lift
+
+    delay(300);
 }
