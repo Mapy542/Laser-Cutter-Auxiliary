@@ -3,11 +3,37 @@
 #include <Wire.h>
 
 /*
+Laser Control Program for K400 Laser Cutter.
+Arduino Mega 2560
+
+Created by: Eli Bukoski
+
+Arduino controls auxiliary features and bed lift. M2 Nano controls laser and laser power supply.
+
+Auxiliary Features:
+    Air Assist
+    Water Chiller
+    Water Pump
+    Exhaust Fan
+    Laser Manual Fire
+    Cabinet LEDS
+
+Bed Lift:
+    Auto Continuous Compensation
+    Manual
+    Single Shot
+
+Work in Progress: Bed Lift PID
+    The control algorithm is basic and choppy. Averaging sensor values would greatly improve the
+output of the PID loop. VL6180X sensor is disappointingly inaccurate (+- 4 mm). However, it is the
+only commodity sensor with a compatible range.
+*/
+
+/*
 All numbers are consistent units.
 
 Distances are in mm.
 Times are in ms.
-Speeds are in mm/s.
 Frequency is in Hz.
 */
 
@@ -107,6 +133,9 @@ SimpleAuxiliaryFeature simpleFeatures[] = {
                            true),  // Water Pump
     SimpleAuxiliaryFeature(36, 32, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
                            true),  // Exhaust Fan
+
+    SimpleAuxiliaryFeature(42, 31, A0, false, true, false, true, false, INPUT, INPUT_PULLUP, false,
+                           true),  // Laser Manual Fire
     // SimpleAuxiliaryFeature(52, A12, A0, false, true, false, false, false, INPUT, INPUT_PULLUP,
     // true,
     //                        false),  // Cabinet LEDS
@@ -115,6 +144,9 @@ SimpleAuxiliaryFeature simpleFeatures[] = {
 byte simpleFeatureCount = sizeof(simpleFeatures) / sizeof(SimpleAuxiliaryFeature);
 
 ///////////////////
+
+int readFailCount = 0;        // number of times the vl sensor has failed to read
+int failResetThreshold = 30;  // number of times the vl sensor can fail to read before it is reset
 
 struct VlData {
     uint8_t range;
@@ -164,7 +196,7 @@ struct VlData ReadVlSensor() {
 
     uint8_t status = vl.readRangeStatus();  // read range status
     uint8_t range = vl.readRangeResult();  // read range result and clear interrupt for next reading
-    Serial.println(range);
+    // Serial.println(range);
 
     VlDebug(status);
 
@@ -174,6 +206,15 @@ struct VlData ReadVlSensor() {
     returns.success = status == VL6180X_ERROR_NONE;
 
     return returns;
+}
+
+void (*resetFunction)(void) = 0;  // declare reset function @ address 0
+
+void CheckReset() {
+    if (readFailCount > failResetThreshold) {
+        // Serial.println("Resetting VL Sensor");
+        resetFunction();  // call reset
+    }
 }
 
 ///////////////////
@@ -264,9 +305,9 @@ class BedLift {
         this->focalLength = focalLength;
         this->sensorOffset = sensorOffset;
 
-        this->Kp = 0.1;
-        this->Ki = 0.0;
-        this->Kd = 0.0;
+        this->Kp = 15;
+        this->Ki = 2;
+        this->Kd = 2;
         this->lastError = 0;
         this->integral = 0;
     }
@@ -314,21 +355,35 @@ class BedLift {
             integral = -50;
         }
 
+        // Serial.print("error: ");
+        // Serial.print(error);
+        // Serial.print(" integral: ");
+        // Serial.print(integral);
+        // Serial.print(" derivative: ");
+        // Serial.print(derivative);
+        // Serial.print(" speed: ");
+
         float speed = Kp * (float)error + Ki * (float)integral + Kd * (float)derivative;
+
+        // Serial.println(speed);
 
         if (speed > 254) {
             speed = 254;
         } else if (speed < -254) {
             speed = -254;
+        } else if (speed < 40 && speed > 0) {
+            speed = 40;
+        } else if (speed > -40 && speed < 0) {
+            speed = -40;
         }
 
         uint8_t speedByte = abs(floor(speed));
 
-        if (error ==
-            0) {  // if error is 0, stop moving (acceptable because error is whole mm divisions)
+        if (abs(error) <=
+            2) {  // if error is 0, stop moving (acceptable because error is whole mm divisions)
             stopActuate();
         } else {
-            updateActuate(error > 0, speedByte);
+            updateActuate(speed > 0, speedByte);
         }
     }
 
@@ -369,14 +424,22 @@ class BedLift {
                                                 // mode
             IlluminateButtonLEDs(true, true);   // disable leds
 
-            struct VlData VlReturn = ReadVlSensor(true);  // read vl sensor and get returns
+            struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
+
+            if (!VlReturn.success) {
+                // Serial.println("read failed/not ready");
+                readFailCount++;
+                return;
+            }
 
             if (VlReturn.success) {                            // if vl sensor read was successful
-                int distance = VlReturn.range + sensorOffset;  // get distance from sensor
+                int distance = VlReturn.range - sensorOffset;  // get distance from sensor
                 int error = distance - focalLength;            // calculate steps to move
-                PidActuate(error);                             // actuate based on error
-            } else {
-                stopActuate();
+                // Serial.println(error);
+                PidActuate(error);
+            }  // actuate based on error
+            else {
+                stopActuate();  // if vl sensor read was not successful, do not actuate
             }
 
         } else {                                // middle single shot mode
@@ -384,15 +447,17 @@ class BedLift {
 
             struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
 
-            if (VlReturn.success == false) {
-                Serial.println("read failed/not ready");
+            if (!VlReturn.success) {
+                // Serial.println("read failed/not ready");
+                readFailCount++;
                 return;
             }
 
             if (upButtonActive) {
                 if (VlReturn.success) {  // if vl sensor read was successful
-                    int distance = VlReturn.range + sensorOffset;  // get distance from sensor
+                    int distance = VlReturn.range - sensorOffset;  // get distance from sensor
                     int error = distance - focalLength;            // calculate steps to move
+                    // Serial.println(error);
                     PidActuate(error);
                 }  // actuate based on error
                 else {
@@ -408,7 +473,7 @@ class BedLift {
 
 BedLift autoBed = BedLift(2, 3, false, 26, 27, INPUT_PULLUP, INPUT_PULLUP, true, true, A4, A3, true,
                           true, INPUT_PULLUP, INPUT_PULLUP, 44, 45, A8, A7, true, true,
-                          INPUT_PULLUP, INPUT_PULLUP, 1000, 2 * 25.4, 5);
+                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15);
 
 ///////////////////
 
@@ -450,10 +515,11 @@ void setup() {
 
     if (!vl.begin()) {
         Serial.println("Failed to find sensor");
-        while (1) {
-            delay(100);
-        }
+        delay(1000);      // wait 1 second
+        resetFunction();  // call reset
     }
+
+    // vl.i2c_dev.setSpeed(20000);
 
     vl.startRangeContinuous(50);  // 50 ms interval continuous mode
 }
@@ -476,5 +542,7 @@ void loop() {
 
     autoBed.update(estop);  // update bed lift
 
-    delay(300);
+    CheckReset();  // check if vl sensor needs to be reset (resets whole arduino)
+
+    delay(50);
 }
