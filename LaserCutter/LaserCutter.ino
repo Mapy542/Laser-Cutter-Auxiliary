@@ -134,7 +134,7 @@ SimpleAuxiliaryFeature simpleFeatures[] = {
     SimpleAuxiliaryFeature(36, 32, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
                            true),  // Exhaust Fan
 
-    SimpleAuxiliaryFeature(42, 31, A0, false, true, false, true, false, INPUT, INPUT_PULLUP, false,
+    SimpleAuxiliaryFeature(42, 31, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
                            true),  // Laser Manual Fire
     // SimpleAuxiliaryFeature(52, A12, A0, false, true, false, false, false, INPUT, INPUT_PULLUP,
     // true,
@@ -196,7 +196,7 @@ struct VlData ReadVlSensor() {
 
     uint8_t status = vl.readRangeStatus();  // read range status
     uint8_t range = vl.readRangeResult();  // read range result and clear interrupt for next reading
-    // Serial.println(range);
+    Serial.println(range);
 
     VlDebug(status);
 
@@ -215,6 +215,23 @@ void CheckReset() {
         // Serial.println("Resetting VL Sensor");
         resetFunction();  // call reset
     }
+}
+
+int averagingArray[20];  // array to store averaging data
+
+void ArrayAppend(int *array, int length, int value) {
+    for (int i = 0; i < length - 1; i++) {
+        array[i] = array[i + 1];
+    }
+    array[length - 1] = value;
+}
+
+int ArrayAverage(int *array, int length) {
+    int sum = 0;
+    for (int i = 0; i < length; i++) {
+        sum += array[i];
+    }
+    return sum / length;
 }
 
 ///////////////////
@@ -268,6 +285,9 @@ class BedLift {
     int lastError;
     int integral;
 
+    int *averagingArray;
+    int averagingArrayLength;
+
    public:
     BedLift(uint8_t dirPin, uint8_t stepPin, bool reverseDirection, uint8_t upLimitSwitchPin,
             uint8_t downLimitSwitchPin, int upLimitSwitchPinMode, int downLimitSwitchPinMode,
@@ -277,7 +297,7 @@ class BedLift {
             int tripleToggleInput1Pin, int tripleToggleInput2Pin, bool invertTripleToggleInput1,
             bool invertTripleToggleInput2, int tripleToggleInput1PinMode,
             int tripleToggleInput2PinMode, uint32_t maxStepFrequency, int focalLength,
-            int sensorOffset) {
+            int sensorOffset, int *averagingArrayPointer) {
         this->dirPin = dirPin;
         this->stepPin = stepPin;
         this->reverseDirection = reverseDirection;
@@ -304,10 +324,12 @@ class BedLift {
         this->maxStepFrequency = maxStepFrequency;
         this->focalLength = focalLength;
         this->sensorOffset = sensorOffset;
+        this->averagingArray = averagingArrayPointer;
+        this->averagingArrayLength = sizeof(averagingArray) / sizeof(int);
 
         this->Kp = 15;
-        this->Ki = 2;
-        this->Kd = 2;
+        this->Ki = 4;
+        this->Kd = 4;
         this->lastError = 0;
         this->integral = 0;
     }
@@ -432,9 +454,12 @@ class BedLift {
                 return;
             }
 
-            if (VlReturn.success) {                            // if vl sensor read was successful
-                int distance = VlReturn.range - sensorOffset;  // get distance from sensor
-                int error = distance - focalLength;            // calculate steps to move
+            if (VlReturn.success) {  // if vl sensor read was successful
+                ArrayAppend(averagingArray, averagingArrayLength,
+                            VlReturn.range);  // append to averaging array
+                int distance = ArrayAverage(averagingArray, averagingArrayLength) -
+                               sensorOffset;         // get distance from sensor
+                int error = distance - focalLength;  // calculate steps to move
                 // Serial.println(error);
                 PidActuate(error);
             }  // actuate based on error
@@ -455,8 +480,11 @@ class BedLift {
 
             if (upButtonActive) {
                 if (VlReturn.success) {  // if vl sensor read was successful
-                    int distance = VlReturn.range - sensorOffset;  // get distance from sensor
-                    int error = distance - focalLength;            // calculate steps to move
+                    ArrayAppend(averagingArray, averagingArrayLength,
+                                VlReturn.range);  // append to averaging array
+                    int distance = ArrayAverage(averagingArray, averagingArrayLength) -
+                                   sensorOffset;         // get distance from sensor
+                    int error = distance - focalLength;  // calculate steps to move
                     // Serial.println(error);
                     PidActuate(error);
                 }  // actuate based on error
@@ -473,7 +501,7 @@ class BedLift {
 
 BedLift autoBed = BedLift(2, 3, false, 26, 27, INPUT_PULLUP, INPUT_PULLUP, true, true, A4, A3, true,
                           true, INPUT_PULLUP, INPUT_PULLUP, 44, 45, A8, A7, true, true,
-                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15);
+                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15, averagingArray);
 
 ///////////////////
 
@@ -521,7 +549,7 @@ void setup() {
 
     // vl.i2c_dev.setSpeed(20000);
 
-    vl.startRangeContinuous(50);  // 50 ms interval continuous mode
+    vl.startRangeContinuous(20);  // 50 ms interval continuous mode
 }
 
 void loop() {
@@ -544,5 +572,5 @@ void loop() {
 
     CheckReset();  // check if vl sensor needs to be reset (resets whole arduino)
 
-    delay(50);
+    delay(30);
 }
