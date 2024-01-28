@@ -327,9 +327,9 @@ class BedLift {
         this->averagingArray = averagingArrayPointer;
         this->averagingArrayLength = sizeof(averagingArray) / sizeof(int);
 
-        this->Kp = 15;
+        this->Kp = 30;
         this->Ki = 4;
-        this->Kd = 4;
+        this->Kd = 0;  // should not use because of noise
         this->lastError = 0;
         this->integral = 0;
     }
@@ -402,7 +402,7 @@ class BedLift {
         uint8_t speedByte = abs(floor(speed));
 
         if (abs(error) <=
-            2) {  // if error is 0, stop moving (acceptable because error is whole mm divisions)
+            1) {  // if error is 0, stop moving (acceptable because error is whole mm divisions)
             stopActuate();
         } else {
             updateActuate(speed > 0, speedByte);
