@@ -125,16 +125,21 @@ class SimpleAuxiliaryFeature {
 };
 
 SimpleAuxiliaryFeature simpleFeatures[] = {
-    SimpleAuxiliaryFeature(52, 35, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(52, 35, A0, true, true, false, false, false, INPUT_PULLUP, INPUT_PULLUP,
+                           true,
                            true),  // Air Assist
-    SimpleAuxiliaryFeature(37, 34, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, false,
-                           true),  // Water Chiller
-    SimpleAuxiliaryFeature(51, 33, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
+    // SimpleAuxiliaryFeature(37, 34, A0, false, true, false, false, false, INPUT_PULLUP,
+    // INPUT_PULLUP, false,
+    //                      true),  // Water Chiller
+    SimpleAuxiliaryFeature(51, 33, A0, false, true, false, false, false, INPUT_PULLUP, INPUT_PULLUP,
+                           true,
                            true),  // Water Pump
-    SimpleAuxiliaryFeature(36, 32, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(36, 32, A0, true, true, false, false, false, INPUT_PULLUP, INPUT_PULLUP,
+                           true,
                            true),  // Exhaust Fan
 
-    SimpleAuxiliaryFeature(42, 31, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
+    SimpleAuxiliaryFeature(42, 31, A0, false, true, false, false, false, INPUT_PULLUP, INPUT_PULLUP,
+                           true,
                            true),  // Laser Manual Fire
     // SimpleAuxiliaryFeature(52, A12, A0, false, true, false, false, false, INPUT, INPUT_PULLUP,
     // true,
@@ -211,6 +216,7 @@ struct VlData ReadVlSensor() {
 void (*resetFunction)(void) = 0;  // declare reset function @ address 0
 
 void CheckReset() {
+    return;  // disable reset
     if (readFailCount > failResetThreshold) {
         // Serial.println("Resetting VL Sensor");
         resetFunction();  // call reset
