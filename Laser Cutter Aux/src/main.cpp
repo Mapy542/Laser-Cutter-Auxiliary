@@ -1,6 +1,7 @@
-#include <AccelStepper.h>
+// #include <AccelStepper.h>
 #include <Adafruit_VL6180X.h>
 #include <Arduino.h>
+#include <SPI.h>
 #include <SingleEMAFilterLib.h>
 #include <Wire.h>
 
@@ -59,9 +60,9 @@ void VlDebug(uint8_t status) {
     isRangeComplete, success will be false and range and status will be 0.
 */
 
-struct VlData ReadVlSensor() {
+VlData ReadVlSensor() {
     if (!vl.isRangeComplete()) {  // if range is not complete, return empty data
-        struct VlData empty;
+        VlData empty;
         empty.range = 0;
         empty.status = 0;
         empty.success = false;
@@ -74,7 +75,7 @@ struct VlData ReadVlSensor() {
 
     VlDebug(status);
 
-    struct VlData returns;
+    VlData returns;
     returns.range = range;
     returns.status = status;
     returns.success = status == VL6180X_ERROR_NONE;
@@ -90,23 +91,6 @@ void CheckReset() {
         // Serial.println("Resetting VL Sensor");
         resetFunction();  // call reset
     }
-}
-
-int averagingArray[20];  // array to store averaging data
-
-void ArrayAppend(int *array, int length, int value) {
-    for (int i = 0; i < length - 1; i++) {
-        array[i] = array[i + 1];
-    }
-    array[length - 1] = value;
-}
-
-int ArrayAverage(int *array, int length) {
-    int sum = 0;
-    for (int i = 0; i < length; i++) {
-        sum += array[i];
-    }
-    return sum / length;
 }
 
 ///////////////////
@@ -163,6 +147,8 @@ class BedLift {
     int *averagingArray;
     int averagingArrayLength;
 
+    SingleEMAFilter<uint8_t> filter;
+
    public:
     BedLift(uint8_t dirPin, uint8_t stepPin, bool reverseDirection, uint8_t upLimitSwitchPin,
             uint8_t downLimitSwitchPin, int upLimitSwitchPinMode, int downLimitSwitchPinMode,
@@ -172,7 +158,8 @@ class BedLift {
             int tripleToggleInput1Pin, int tripleToggleInput2Pin, bool invertTripleToggleInput1,
             bool invertTripleToggleInput2, int tripleToggleInput1PinMode,
             int tripleToggleInput2PinMode, uint32_t maxStepFrequency, int focalLength,
-            int sensorOffset, int *averagingArrayPointer) {
+            int sensorOffset, float filterAlpha)
+        : filter(filterAlpha) {
         this->dirPin = dirPin;
         this->stepPin = stepPin;
         this->reverseDirection = reverseDirection;
@@ -199,7 +186,6 @@ class BedLift {
         this->maxStepFrequency = maxStepFrequency;
         this->focalLength = focalLength;
         this->sensorOffset = sensorOffset;
-        this->averagingArray = averagingArrayPointer;
         this->averagingArrayLength = sizeof(averagingArray) / sizeof(int);
 
         this->Kp = 30;
@@ -223,8 +209,17 @@ class BedLift {
     }
 
     void updateActuate(bool dir, uint8_t speed) {
+        bool upLimActive = digitalRead(upLimitSwitchPin) != invertUpLimitSwitch;
+        bool downLimActive = digitalRead(downLimitSwitchPin) != invertDownLimitSwitch;
+
         digitalWrite(dirPin, dir != reverseDirection);
         if (speed == 0) {
+            noTone(stepPin);
+            return;
+        } else if (upLimActive && dir) {
+            noTone(stepPin);
+            return;
+        } else if (downLimActive && !dir) {
             noTone(stepPin);
             return;
         } else {
@@ -303,22 +298,22 @@ class BedLift {
 
         if (tripleToggleInput1Active ==
             invertTripleToggleInput1) {  // if switch is left, manual mode
-            IlluminateButtonLEDs(
-                upLimitSwitchActive,
-                downLimitSwitchActive);  // illuminate leds based on which directions are available
-            if (upButtonActive && !upLimitSwitchActive) {  // if up button is pressed and up limit
-                                                           // switch is not active
+            IlluminateButtonLEDs(upLimitSwitchActive,
+                                 downLimitSwitchActive);   // illuminate leds based on which
+                                                           // directions are available
+            if (upButtonActive && !upLimitSwitchActive) {  // if up button is pressed and up
+                                                           // limit switch is not active
                 updateActuate(true, 255);                  // move up
             } else if (downButtonActive &&
-                       !downLimitSwitchActive) {  // if down button is pressed and down limit switch
-                                                  // is not active
+                       !downLimitSwitchActive) {  // if down button is pressed and down limit
+                                                  // switch is not active
                 updateActuate(false, 255);        // move down
             } else {
                 stopActuate();  // stop moving
             }
         } else if (tripleToggleInput2Active ==
-                   invertTripleToggleInput2) {  // if switch is right, auto continuous compensation
-                                                // mode
+                   invertTripleToggleInput2) {  // if switch is right, auto continuous
+                                                // compensation mode
             IlluminateButtonLEDs(true, true);   // disable leds
 
             struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
@@ -329,12 +324,10 @@ class BedLift {
                 return;
             }
 
-            if (VlReturn.success) {  // if vl sensor read was successful
-                ArrayAppend(averagingArray, averagingArrayLength,
-                            VlReturn.range);  // append to averaging array
-                int distance = ArrayAverage(averagingArray, averagingArrayLength) -
-                               sensorOffset;         // get distance from sensor
-                int error = distance - focalLength;  // calculate steps to move
+            if (VlReturn.success) {               // if vl sensor read was successful
+                filter.AddValue(VlReturn.range);  // get distance from sensor
+                int distance = filter.GetLowPass() - sensorOffset;  // get distance from sensor
+                int error = distance - focalLength;                 // calculate steps to move
                 // Serial.println(error);
                 PidActuate(error);
             }  // actuate based on error
@@ -342,8 +335,9 @@ class BedLift {
                 stopActuate();  // if vl sensor read was not successful, do not actuate
             }
 
-        } else {                                // middle single shot mode
-            IlluminateButtonLEDs(false, true);  // illuminate up button led (as the activate button)
+        } else {  // middle single shot mode
+            IlluminateButtonLEDs(false,
+                                 true);  // illuminate up button led (as the activate button)
 
             struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
 
@@ -354,12 +348,10 @@ class BedLift {
             }
 
             if (upButtonActive) {
-                if (VlReturn.success) {  // if vl sensor read was successful
-                    ArrayAppend(averagingArray, averagingArrayLength,
-                                VlReturn.range);  // append to averaging array
-                    int distance = ArrayAverage(averagingArray, averagingArrayLength) -
-                                   sensorOffset;         // get distance from sensor
-                    int error = distance - focalLength;  // calculate steps to move
+                if (VlReturn.success) {               // if vl sensor read was successful
+                    filter.AddValue(VlReturn.range);  // get distance from sensor
+                    int distance = filter.GetLowPass() - sensorOffset;  // get distance from sensor
+                    int error = distance - focalLength;                 // calculate steps to move
                     // Serial.println(error);
                     PidActuate(error);
                 }  // actuate based on error
@@ -376,7 +368,7 @@ class BedLift {
 
 BedLift autoBed = BedLift(2, 3, false, 26, 27, INPUT_PULLUP, INPUT_PULLUP, true, true, A2, A3, true,
                           true, INPUT_PULLUP, INPUT_PULLUP, 35, 34, A0, A1, true, true,
-                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15, averagingArray);
+                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15, 0.7);
 
 ///////////////////
 
