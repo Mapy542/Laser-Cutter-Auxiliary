@@ -1,5 +1,8 @@
+// #include <AccelStepper.h>
 #include <Adafruit_VL6180X.h>
 #include <Arduino.h>
+#include <SPI.h>
+#include <SingleEMAFilterLib.h>
 #include <Wire.h>
 
 /*
@@ -7,26 +10,6 @@ Laser Control Program for K400 Laser Cutter.
 Arduino Mega 2560
 
 Created by: Eli Bukoski
-
-Arduino controls auxiliary features and bed lift. M2 Nano controls laser and laser power supply.
-
-Auxiliary Features:
-    Air Assist
-    Water Chiller
-    Water Pump
-    Exhaust Fan
-    Laser Manual Fire
-    Cabinet LEDS
-
-Bed Lift:
-    Auto Continuous Compensation
-    Manual
-    Single Shot
-
-Work in Progress: Bed Lift PID
-    The control algorithm is basic and choppy. Averaging sensor values would greatly improve the
-output of the PID loop. VL6180X sensor is disappointingly inaccurate (+- 4 mm). However, it is the
-only commodity sensor with a compatible range.
 */
 
 /*
@@ -36,114 +19,6 @@ Distances are in mm.
 Times are in ms.
 Frequency is in Hz.
 */
-
-class SimpleAuxiliaryFeature {
-   private:
-    int outputPin;   // pin to output to
-    int inputPin;    // pin to read from for state, (switch or button)
-    int triggerPin;  // pin to read from for trigger, (Laser Active Signal)
-
-    bool triggerAffected;  // if the trigger activates the feature, false means
-                           // trigger pin is ignored
-    bool inputAffected;    // if the input activates the feature, false means input
-                           // pin is ignored
-
-    bool triggerOutputRelation;  // true means trigger activates output, false
-                                 // means trigger deactivates output
-    bool inputOutputRelation;    // true means input activates output, false means
-                                 // input deactivates output
-
-    bool inputTriggerRelation;  // true means input and trigger must both be
-                                // active to activate output, false means only one
-                                // must be active this and/or comparison is made
-                                // after the output relations are made
-
-    int triggerPinMode;  // mode to set the trigger pin to
-    int inputPinMode;    // mode to set the input pin to
-
-    bool invertOutput;  // if the output should be inverted
-
-    bool EstopAffected;  // if the estop affects the feature, false means estop
-                         // pin is ignored
-
-   public:
-    SimpleAuxiliaryFeature(int outputPin, int inputPin, int triggerPin, bool triggerAffected,
-                           bool inputAffected, bool triggerOutputRelation, bool inputOutputRelation,
-                           bool inputTriggerRelation, int triggerPinMode, int inputPinMode,
-                           bool invertOutput, bool estopAffected) {
-        this->outputPin = outputPin;
-        this->inputPin = inputPin;
-        this->triggerPin = triggerPin;
-        this->triggerAffected = triggerAffected;
-        this->inputAffected = inputAffected;
-        this->triggerOutputRelation = triggerOutputRelation;
-        this->inputOutputRelation = inputOutputRelation;
-        this->inputTriggerRelation = inputTriggerRelation;
-        this->triggerPinMode = triggerPinMode;
-        this->inputPinMode = inputPinMode;
-        this->invertOutput = invertOutput;
-        this->EstopAffected = estopAffected;
-    }
-
-    void initialize() {  // called once to initialize the feature
-        pinMode(outputPin, OUTPUT);
-        pinMode(inputPin, inputPinMode);
-        pinMode(triggerPin, triggerPinMode);
-
-        digitalWrite(outputPin, invertOutput);
-    }
-
-    void update(bool estop) {  // called every loop to update the output pin
-
-        if (estop && EstopAffected) {
-            digitalWrite(outputPin, false != invertOutput);
-            return;
-        }
-
-        bool triggerActive = digitalRead(triggerPin);
-        bool inputActive = digitalRead(inputPin);
-
-        bool outputActive = false;
-
-        bool relatedTrigger = triggerActive == triggerOutputRelation;
-        bool relatedInput = inputActive == inputOutputRelation;
-
-        if (!triggerAffected) {
-            outputActive = relatedInput != invertOutput;
-        } else if (!inputAffected) {
-            outputActive = relatedTrigger != invertOutput;
-        } else {
-            if (inputTriggerRelation) {
-                outputActive = (relatedTrigger && relatedInput) != invertOutput;
-            } else {
-                outputActive = (relatedTrigger || relatedInput) != invertOutput;
-            }
-        }
-
-        digitalWrite(outputPin, outputActive);
-    }
-};
-
-SimpleAuxiliaryFeature simpleFeatures[] = {
-    SimpleAuxiliaryFeature(52, 35, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
-                           true),  // Air Assist
-    SimpleAuxiliaryFeature(37, 34, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, false,
-                           true),  // Water Chiller
-    SimpleAuxiliaryFeature(51, 33, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
-                           true),  // Water Pump
-    SimpleAuxiliaryFeature(36, 32, A0, true, true, true, false, false, INPUT, INPUT_PULLUP, true,
-                           true),  // Exhaust Fan
-
-    SimpleAuxiliaryFeature(42, 31, A0, false, true, false, false, false, INPUT, INPUT_PULLUP, true,
-                           true),  // Laser Manual Fire
-    // SimpleAuxiliaryFeature(52, A12, A0, false, true, false, false, false, INPUT, INPUT_PULLUP,
-    // true,
-    //                        false),  // Cabinet LEDS
-};
-
-byte simpleFeatureCount = sizeof(simpleFeatures) / sizeof(SimpleAuxiliaryFeature);
-
-///////////////////
 
 int readFailCount = 0;        // number of times the vl sensor has failed to read
 int failResetThreshold = 30;  // number of times the vl sensor can fail to read before it is reset
@@ -185,22 +60,24 @@ void VlDebug(uint8_t status) {
     isRangeComplete, success will be false and range and status will be 0.
 */
 
-struct VlData ReadVlSensor() {
+VlData ReadVlSensor() {
     if (!vl.isRangeComplete()) {  // if range is not complete, return empty data
-        struct VlData empty;
+        VlData empty;
         empty.range = 0;
         empty.status = 0;
         empty.success = false;
         return empty;
     }
-
+    Serial.println("Range complete");
+    delay(5);
     uint8_t status = vl.readRangeStatus();  // read range status
+    Serial.print("Status: ");
     uint8_t range = vl.readRangeResult();  // read range result and clear interrupt for next reading
     Serial.println(range);
 
     VlDebug(status);
 
-    struct VlData returns;
+    VlData returns;
     returns.range = range;
     returns.status = status;
     returns.success = status == VL6180X_ERROR_NONE;
@@ -211,27 +88,11 @@ struct VlData ReadVlSensor() {
 void (*resetFunction)(void) = 0;  // declare reset function @ address 0
 
 void CheckReset() {
+    return;  // disable reset
     if (readFailCount > failResetThreshold) {
         // Serial.println("Resetting VL Sensor");
         resetFunction();  // call reset
     }
-}
-
-int averagingArray[20];  // array to store averaging data
-
-void ArrayAppend(int *array, int length, int value) {
-    for (int i = 0; i < length - 1; i++) {
-        array[i] = array[i + 1];
-    }
-    array[length - 1] = value;
-}
-
-int ArrayAverage(int *array, int length) {
-    int sum = 0;
-    for (int i = 0; i < length; i++) {
-        sum += array[i];
-    }
-    return sum / length;
 }
 
 ///////////////////
@@ -288,6 +149,8 @@ class BedLift {
     int *averagingArray;
     int averagingArrayLength;
 
+    SingleEMAFilter<uint8_t> filter;
+
    public:
     BedLift(uint8_t dirPin, uint8_t stepPin, bool reverseDirection, uint8_t upLimitSwitchPin,
             uint8_t downLimitSwitchPin, int upLimitSwitchPinMode, int downLimitSwitchPinMode,
@@ -297,7 +160,8 @@ class BedLift {
             int tripleToggleInput1Pin, int tripleToggleInput2Pin, bool invertTripleToggleInput1,
             bool invertTripleToggleInput2, int tripleToggleInput1PinMode,
             int tripleToggleInput2PinMode, uint32_t maxStepFrequency, int focalLength,
-            int sensorOffset, int *averagingArrayPointer) {
+            int sensorOffset, float filterAlpha)
+        : filter(filterAlpha) {
         this->dirPin = dirPin;
         this->stepPin = stepPin;
         this->reverseDirection = reverseDirection;
@@ -324,7 +188,6 @@ class BedLift {
         this->maxStepFrequency = maxStepFrequency;
         this->focalLength = focalLength;
         this->sensorOffset = sensorOffset;
-        this->averagingArray = averagingArrayPointer;
         this->averagingArrayLength = sizeof(averagingArray) / sizeof(int);
 
         this->Kp = 30;
@@ -348,8 +211,17 @@ class BedLift {
     }
 
     void updateActuate(bool dir, uint8_t speed) {
+        bool upLimActive = digitalRead(upLimitSwitchPin) != invertUpLimitSwitch;
+        bool downLimActive = digitalRead(downLimitSwitchPin) != invertDownLimitSwitch;
+
         digitalWrite(dirPin, dir != reverseDirection);
         if (speed == 0) {
+            noTone(stepPin);
+            return;
+        } else if (upLimActive && dir) {
+            noTone(stepPin);
+            return;
+        } else if (downLimActive && !dir) {
             noTone(stepPin);
             return;
         } else {
@@ -428,38 +300,36 @@ class BedLift {
 
         if (tripleToggleInput1Active ==
             invertTripleToggleInput1) {  // if switch is left, manual mode
-            IlluminateButtonLEDs(
-                upLimitSwitchActive,
-                downLimitSwitchActive);  // illuminate leds based on which directions are available
-            if (upButtonActive && !upLimitSwitchActive) {  // if up button is pressed and up limit
-                                                           // switch is not active
+            IlluminateButtonLEDs(upLimitSwitchActive,
+                                 downLimitSwitchActive);   // illuminate leds based on which
+                                                           // directions are available
+            if (upButtonActive && !upLimitSwitchActive) {  // if up button is pressed and up
+                                                           // limit switch is not active
                 updateActuate(true, 255);                  // move up
             } else if (downButtonActive &&
-                       !downLimitSwitchActive) {  // if down button is pressed and down limit switch
-                                                  // is not active
+                       !downLimitSwitchActive) {  // if down button is pressed and down limit
+                                                  // switch is not active
                 updateActuate(false, 255);        // move down
             } else {
                 stopActuate();  // stop moving
             }
         } else if (tripleToggleInput2Active ==
-                   invertTripleToggleInput2) {  // if switch is right, auto continuous compensation
-                                                // mode
+                   invertTripleToggleInput2) {  // if switch is right, auto continuous
+                                                // compensation mode
             IlluminateButtonLEDs(true, true);   // disable leds
-
+            Serial.println("str auto");
             struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
-
+            Serial.println("get success");
             if (!VlReturn.success) {
                 // Serial.println("read failed/not ready");
                 readFailCount++;
                 return;
             }
-
-            if (VlReturn.success) {  // if vl sensor read was successful
-                ArrayAppend(averagingArray, averagingArrayLength,
-                            VlReturn.range);  // append to averaging array
-                int distance = ArrayAverage(averagingArray, averagingArrayLength) -
-                               sensorOffset;         // get distance from sensor
-                int error = distance - focalLength;  // calculate steps to move
+            Serial.println("update pid");
+            if (VlReturn.success) {               // if vl sensor read was successful
+                filter.AddValue(VlReturn.range);  // get distance from sensor
+                int distance = filter.GetLowPass() - sensorOffset;  // get distance from sensor
+                int error = distance - focalLength;                 // calculate steps to move
                 // Serial.println(error);
                 PidActuate(error);
             }  // actuate based on error
@@ -467,8 +337,9 @@ class BedLift {
                 stopActuate();  // if vl sensor read was not successful, do not actuate
             }
 
-        } else {                                // middle single shot mode
-            IlluminateButtonLEDs(false, true);  // illuminate up button led (as the activate button)
+        } else {  // middle single shot mode
+            IlluminateButtonLEDs(false,
+                                 true);  // illuminate up button led (as the activate button)
 
             struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
 
@@ -479,12 +350,10 @@ class BedLift {
             }
 
             if (upButtonActive) {
-                if (VlReturn.success) {  // if vl sensor read was successful
-                    ArrayAppend(averagingArray, averagingArrayLength,
-                                VlReturn.range);  // append to averaging array
-                    int distance = ArrayAverage(averagingArray, averagingArrayLength) -
-                                   sensorOffset;         // get distance from sensor
-                    int error = distance - focalLength;  // calculate steps to move
+                if (VlReturn.success) {               // if vl sensor read was successful
+                    filter.AddValue(VlReturn.range);  // get distance from sensor
+                    int distance = filter.GetLowPass() - sensorOffset;  // get distance from sensor
+                    int error = distance - focalLength;                 // calculate steps to move
                     // Serial.println(error);
                     PidActuate(error);
                 }  // actuate based on error
@@ -499,18 +368,17 @@ class BedLift {
     }
 };
 
-BedLift autoBed = BedLift(2, 3, false, 26, 27, INPUT_PULLUP, INPUT_PULLUP, true, true, A4, A3, true,
-                          true, INPUT_PULLUP, INPUT_PULLUP, 44, 45, A8, A7, true, true,
-                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15, averagingArray);
+BedLift autoBed = BedLift(2, 3, false, 12, 13, INPUT_PULLUP, INPUT_PULLUP, true, true, A2, A3, true,
+                          true, INPUT_PULLUP, INPUT_PULLUP, 7, 8, A0, A1, true, true, INPUT_PULLUP,
+                          INPUT_PULLUP, 15000, 2 * 25.4, 15, 0.7);
 
 ///////////////////
 
 bool TriggerEStop = false;
 
-int EStopPin = 22;
-int LaserStopPin = 23;
+int EStopPin = 10;
+int LaserStopPin = 11;
 int SafetyRelayResetButtonLED = 4;
-int BreakEstopPin = 53;
 
 byte safetyRelayResetButtonIlluminationState = 0;
 
@@ -528,49 +396,40 @@ void safetyRelayResetButtonIlluminate(bool estop, bool laserStop) {
 
 void setup() {
     Serial.begin(115200);
-
-    for (int i = 0; i < simpleFeatureCount; i++) {  // initialize all features
-        simpleFeatures[i].initialize();
-    }
+    Wire.setWireTimeout(100000, true);
+    Wire.setClock(50000);
 
     autoBed.initialize();  // initialize bed lift
+
+    pinMode(13, OUTPUT);
+    digitalWrite(13, HIGH);
+
+    delay(1000);
 
     pinMode(EStopPin, INPUT);
     pinMode(LaserStopPin, INPUT);
     pinMode(SafetyRelayResetButtonLED, OUTPUT);
-    pinMode(BreakEstopPin, OUTPUT);
-    pinMode(24, INPUT);
 
-    if (!vl.begin()) {
+    if (!vl.begin()) {  // initialize vl6180x sensor
         Serial.println("Failed to find sensor");
         delay(1000);      // wait 1 second
         resetFunction();  // call reset
     }
 
-    // vl.i2c_dev.setSpeed(20000);
-
-    vl.startRangeContinuous(20);  // 50 ms interval continuous mode
+    vl.startRangeContinuous(50);  // 50 ms interval continuous mode
 }
 
 void loop() {
     bool estop =
         digitalRead(EStopPin) != true;  // read estop pin and laser stop pin (invert signal)
     bool laserStop = digitalRead(LaserStopPin) != true;
-    digitalWrite(LED_BUILTIN, estop);  // set builtin led to estop state
-
-    for (int i = 0; i < simpleFeatureCount; i++) {  // update all features
-        simpleFeatures[i].update(estop);
-    }
 
     safetyRelayResetButtonIlluminate(estop,
                                      laserStop);  // update safety relay reset button illumination
-
-    digitalWrite(BreakEstopPin,
-                 TriggerEStop);  // set break estop pin to trigger estop if applicable
 
     autoBed.update(estop);  // update bed lift
 
     CheckReset();  // check if vl sensor needs to be reset (resets whole arduino)
 
-    delay(30);
+    delay(10);
 }
