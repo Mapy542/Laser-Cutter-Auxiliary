@@ -1,0 +1,114 @@
+#include <Adafruit_VL6180X.h>
+#include <Arduino.h>
+#include <SPI.h>
+#include <SingleEMAFilterLib.h>
+#include <Wire.h>
+// Example: Simple Software I2C (Bit-Bang) for Arduino
+// Uses A4 as SDA, A5 as SCL
+
+#define SOFT_I2C_SDA_PIN A4
+#define SOFT_I2C_SCL_PIN A5
+
+unsigned int softI2C_delay_us = 5;  // Set for ~100kHz, adjust as needed
+
+void softI2C_setBaud(unsigned int baud) {
+    // baud in Hz, e.g. 100000 for 100kHz
+    softI2C_delay_us = 500000 / baud;  // Half period in us
+}
+
+void softI2C_init() {
+    pinMode(SOFT_I2C_SDA_PIN, OUTPUT);
+    pinMode(SOFT_I2C_SCL_PIN, OUTPUT);
+    digitalWrite(SOFT_I2C_SDA_PIN, HIGH);
+    digitalWrite(SOFT_I2C_SCL_PIN, HIGH);
+}
+
+void softI2C_sdaHigh() { pinMode(SOFT_I2C_SDA_PIN, INPUT_PULLUP); }
+void softI2C_sdaLow() {
+    pinMode(SOFT_I2C_SDA_PIN, OUTPUT);
+    digitalWrite(SOFT_I2C_SDA_PIN, LOW);
+}
+void softI2C_sclHigh() { pinMode(SOFT_I2C_SCL_PIN, INPUT_PULLUP); }
+void softI2C_sclLow() {
+    pinMode(SOFT_I2C_SCL_PIN, OUTPUT);
+    digitalWrite(SOFT_I2C_SCL_PIN, LOW);
+}
+
+void softI2C_start() {
+    softI2C_sdaHigh();
+    softI2C_sclHigh();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sdaLow();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sclLow();
+}
+
+void softI2C_stop() {
+    softI2C_sdaLow();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sclHigh();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sdaHigh();
+    delayMicroseconds(softI2C_delay_us);
+}
+
+bool softI2C_write(uint8_t data) {
+    for (uint8_t i = 0; i < 8; i++) {
+        if (data & 0x80)
+            softI2C_sdaHigh();
+        else
+            softI2C_sdaLow();
+        delayMicroseconds(softI2C_delay_us);
+        softI2C_sclHigh();
+        delayMicroseconds(softI2C_delay_us);
+        softI2C_sclLow();
+        data <<= 1;
+    }
+    // ACK bit
+    softI2C_sdaHigh();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sclHigh();
+    bool ack = (digitalRead(SOFT_I2C_SDA_PIN) == 0);
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sclLow();
+    return ack;
+}
+
+uint8_t softI2C_read(bool ack) {
+    uint8_t data = 0;
+    softI2C_sdaHigh();
+    for (uint8_t i = 0; i < 8; i++) {
+        data <<= 1;
+        softI2C_sclHigh();
+        delayMicroseconds(softI2C_delay_us);
+        if (digitalRead(SOFT_I2C_SDA_PIN)) data |= 1;
+        softI2C_sclLow();
+        delayMicroseconds(softI2C_delay_us);
+    }
+    // Send ACK/NACK
+    if (ack)
+        softI2C_sdaLow();
+    else
+        softI2C_sdaHigh();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sclHigh();
+    delayMicroseconds(softI2C_delay_us);
+    softI2C_sclLow();
+    softI2C_sdaHigh();
+    return data;
+}
+
+void setup() {
+    Serial.begin(115200);
+    softI2C_init();
+    softI2C_setBaud(100);
+    softI2C_start();
+    Serial.println("Soft I2C Initialized");
+    softI2C_start();                      // Repeated start
+    softI2C_write((0x29 << 1) | 1);       // VL6180X I2C address, read
+    uint8_t value = softI2C_read(false);  // NACK after last byte
+    Serial.print("Read value: ");
+    Serial.println(value, HEX);
+}
+
+void loop() {}

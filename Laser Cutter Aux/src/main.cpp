@@ -68,8 +68,10 @@ VlData ReadVlSensor() {
         empty.success = false;
         return empty;
     }
-
+    Serial.println("Range complete");
+    delay(5);
     uint8_t status = vl.readRangeStatus();  // read range status
+    Serial.print("Status: ");
     uint8_t range = vl.readRangeResult();  // read range result and clear interrupt for next reading
     Serial.println(range);
 
@@ -315,15 +317,15 @@ class BedLift {
                    invertTripleToggleInput2) {  // if switch is right, auto continuous
                                                 // compensation mode
             IlluminateButtonLEDs(true, true);   // disable leds
-
+            Serial.println("str auto");
             struct VlData VlReturn = ReadVlSensor();  // read vl sensor and get returns
-
+            Serial.println("get success");
             if (!VlReturn.success) {
                 // Serial.println("read failed/not ready");
                 readFailCount++;
                 return;
             }
-
+            Serial.println("update pid");
             if (VlReturn.success) {               // if vl sensor read was successful
                 filter.AddValue(VlReturn.range);  // get distance from sensor
                 int distance = filter.GetLowPass() - sensorOffset;  // get distance from sensor
@@ -366,18 +368,17 @@ class BedLift {
     }
 };
 
-BedLift autoBed = BedLift(2, 3, false, 26, 27, INPUT_PULLUP, INPUT_PULLUP, true, true, A2, A3, true,
-                          true, INPUT_PULLUP, INPUT_PULLUP, 35, 34, A0, A1, true, true,
-                          INPUT_PULLUP, INPUT_PULLUP, 15000, 2 * 25.4, 15, 0.7);
+BedLift autoBed = BedLift(2, 3, false, 12, 13, INPUT_PULLUP, INPUT_PULLUP, true, true, A2, A3, true,
+                          true, INPUT_PULLUP, INPUT_PULLUP, 7, 8, A0, A1, true, true, INPUT_PULLUP,
+                          INPUT_PULLUP, 15000, 2 * 25.4, 15, 0.7);
 
 ///////////////////
 
 bool TriggerEStop = false;
 
-int EStopPin = 22;
-int LaserStopPin = 23;
+int EStopPin = 10;
+int LaserStopPin = 11;
 int SafetyRelayResetButtonLED = 4;
-int BreakEstopPin = 53;
 
 byte safetyRelayResetButtonIlluminationState = 0;
 
@@ -395,41 +396,40 @@ void safetyRelayResetButtonIlluminate(bool estop, bool laserStop) {
 
 void setup() {
     Serial.begin(115200);
+    Wire.setWireTimeout(100000, true);
+    Wire.setClock(50000);
 
     autoBed.initialize();  // initialize bed lift
+
+    pinMode(13, OUTPUT);
+    digitalWrite(13, HIGH);
+
+    delay(1000);
 
     pinMode(EStopPin, INPUT);
     pinMode(LaserStopPin, INPUT);
     pinMode(SafetyRelayResetButtonLED, OUTPUT);
-    pinMode(BreakEstopPin, OUTPUT);
-    pinMode(24, INPUT);
 
-    if (!vl.begin()) {
+    if (!vl.begin()) {  // initialize vl6180x sensor
         Serial.println("Failed to find sensor");
         delay(1000);      // wait 1 second
         resetFunction();  // call reset
     }
 
-    // vl.i2c_dev.setSpeed(20000);
-
-    vl.startRangeContinuous(20);  // 50 ms interval continuous mode
+    vl.startRangeContinuous(50);  // 50 ms interval continuous mode
 }
 
 void loop() {
     bool estop =
         digitalRead(EStopPin) != true;  // read estop pin and laser stop pin (invert signal)
     bool laserStop = digitalRead(LaserStopPin) != true;
-    digitalWrite(LED_BUILTIN, laserStop);  // set builtin led to estop state
 
     safetyRelayResetButtonIlluminate(estop,
                                      laserStop);  // update safety relay reset button illumination
-
-    digitalWrite(BreakEstopPin,
-                 TriggerEStop);  // set break estop pin to trigger estop if applicable
 
     autoBed.update(estop);  // update bed lift
 
     CheckReset();  // check if vl sensor needs to be reset (resets whole arduino)
 
-    delay(3);
+    delay(10);
 }
