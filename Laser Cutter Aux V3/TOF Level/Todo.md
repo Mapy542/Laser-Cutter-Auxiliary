@@ -1,0 +1,3 @@
+-   I2C bus capacitance fix. Use logic level converter?
+-   Remove 2.8v regulator and power vl from 3.3v line
+-   Add control dip switch for selecting between 2" and 4" lens and other modes
