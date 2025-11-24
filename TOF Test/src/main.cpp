@@ -1,61 +1,58 @@
-#include <Arduino.h>
+#include "Adafruit_VL53L1X.h"
 
-/*
-This example takes range measurements with the VL53L1X and displays additional
-details (status and signal/ambient rates) for each measurement, which can help
-you determine whether the sensor is operating normally and the reported range is
-valid. The range is in units of mm, and the rates are in units of MCPS (mega
-counts per second).
-*/
+Adafruit_VL53L1X vl53 = Adafruit_VL53L1X();
 
-#include <VL53L1X.h>
-#include <Wire.h>
-
-VL53L1X sensor;
-
+#ifdef __CH32V__
 #define LED0 PC7
 #define LED1 PD0
+#else
+#define LED0 LED_BUILTIN
+#define LED1 LED_BUILTIN
+#endif
 
 void setup() {
     Wire.begin();
-    Wire.setClock(100000);  // use 400 kHz I2C
+    if (!vl53.begin(0x29, &Wire)) {
+        while (1) delay(10);
+    }
+    if (!vl53.startRanging()) {
+        while (1) delay(10);
+    }
+
+    // Valid timing budgets: 15, 20, 33, 50, 100, 200 and 500ms!
+    vl53.VL53L1X_SetDistanceMode(1);
+    vl53.setTimingBudget(50);
+
+    /*
+    vl.VL53L1X_SetDistanceThreshold(100, 300, 3, 1);
+    vl.VL53L1X_SetInterruptPolarity(0);
+    */
 
     pinMode(LED0, OUTPUT);
     pinMode(LED1, OUTPUT);
-
-    sensor.setTimeout(500);
-    if (!sensor.init()) {
-        while (1);
-    }
-
-    // Use long distance mode and allow up to 50000 us (50 ms) for a measurement.
-    // You can change these settings to adjust the performance of the sensor, but
-    // the minimum timing budget is 20 ms for short distance mode and 33 ms for
-    // medium and long distance modes. See the VL53L1X datasheet for more
-    // information on range and timing limits.
-    sensor.setDistanceMode(VL53L1X::Short);
-    sensor.setMeasurementTimingBudget(100000);
-
-    // Start continuous readings at a rate of one measurement every 50 ms (the
-    // inter-measurement period). This period should be at least as long as the
-    // timing budget.
-    sensor.startContinuous(100);
-
-    digitalWrite(LED0, HIGH);
-    digitalWrite(LED1, HIGH);
 }
 
 void loop() {
-    if (sensor.read() > 102) {
-        digitalWrite(LED0, HIGH);
-        digitalWrite(LED1, LOW);
-    } else if (sensor.read() > 100) {
-        digitalWrite(LED0, LOW);
-        digitalWrite(LED1, HIGH);
-    } else {
-        digitalWrite(LED0, LOW);
-        digitalWrite(LED1, LOW);
-    }
+    int16_t distance;
 
-    delay(100);
+    if (vl53.dataReady()) {
+        // new measurement for the taking!
+        distance = vl53.distance();
+        if (distance == -1) {
+            return;
+        }
+        if (distance > 102) {
+            digitalWrite(LED0, HIGH);
+            digitalWrite(LED1, LOW);
+        } else if (distance > 100) {
+            digitalWrite(LED0, LOW);
+            digitalWrite(LED1, HIGH);
+        } else {
+            digitalWrite(LED0, LOW);
+            digitalWrite(LED1, LOW);
+        }
+
+        // data is read out, time for another reading!
+        vl53.clearInterrupt();
+    }
 }
