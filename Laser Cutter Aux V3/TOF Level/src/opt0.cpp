@@ -4,8 +4,8 @@
 namespace opt0mode {
 void initDataBus() {
     // Init the pinmodes of the data bus for limit switch mode
-    pinMode(PC6, OUTPUT_AF_OD);    // Set PC6 as open drain output for limit switch output signal
-    pinMode(PC5, INPUT_PULLDOWN);  // Set PC5 as input with pulldown for halt signal
+    pinMode(PC6, OUTPUT_AF_OD);  // Set PC6 as open drain output for limit switch output signal
+    // pinMode(PC5, INPUT_PULLDOWN);  // Set PC5 as input with pulldown for halt signal
 }
 
 uint32_t averageReadings[5] = {0};
