@@ -19,6 +19,9 @@ uint8_t optSetting = 0;
 VL53L1X sensor;
 
 void setup() {
+    pinMode(LED1, OUTPUT);
+    pinMode(LED2, OUTPUT);
+
     optSetting = readOpt::ReadOpt(OPT0_PIN, OPT1_PIN, OPT2_PIN);
 
     if ((optSetting & 1) == 0) {
@@ -28,16 +31,17 @@ void setup() {
     Wire.begin();
     Wire.setClock(100000);  // use 100 kHz I2C
 
-    pinMode(LED1, OUTPUT);
-    pinMode(LED2, OUTPUT);
-
     sensor.setTimeout(500);
     if (!sensor.init(false)) {
         while (1);
     }
     sensor.setDistanceMode(VL53L1X::Short);
-    sensor.setMeasurementTimingBudget(100000);
-    sensor.startContinuous(100);
+    sensor.setMeasurementTimingBudget(50000);
+    sensor.startContinuous(50);
+
+    digitalWrite(LED1, HIGH);
+    digitalWrite(LED2, HIGH);
+    delay(1000);
 }
 
 void loop() {
@@ -47,12 +51,15 @@ void loop() {
             if (digitalRead(LED1) == 0) {
                 digitalWrite(LED1, HIGH);  // Indicate active
                 sensor.startContinuous(100);
+                digitalWrite(LED2, HIGH);
+                delay(100);
+                digitalWrite(LED2, LOW);
             }
             delay(100);  // Allow some time between readings
             uint32_t avgDistance = opt0mode::GetAveragedDistance(sensor.read());
             if (optSetting & 0b10) {
                 // 4" Lens
-                if (avgDistance <= (51 + FOCALOffset)) {
+                if (avgDistance <= (101 + FOCALOffset)) {
                     digitalWrite(PC6, LOW);    // Activate Limit Switch
                     digitalWrite(LED2, HIGH);  // Indicate Triggered
                 } else {
