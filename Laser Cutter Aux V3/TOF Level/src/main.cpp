@@ -5,7 +5,7 @@
 #include "opt0.h"
 #include "readOpt.h"
 
-#define FOCALOffset 2
+#define FOCALOffset -10
 // in mm, sensor to lens height difference
 
 #define LED1 PC7
